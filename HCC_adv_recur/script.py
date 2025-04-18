@@ -1,4 +1,3 @@
-
 def n4_bias_correction(input_image, iterations=25, fitting_level=5):
     try:
         mask_image = sitk.OtsuThreshold(input_image, 0, 1, 200)
