@@ -1,0 +1,119 @@
+import SimpleITK as sitk
+import os
+import glob
+
+def n4_bias_correction(input_image, iterations=25, fitting_level=5):
+    """
+    Applies the N4 bias field correction algorithm to a SimpleITK image.
+
+    This function corrects for low-frequency intensity non-uniformities, often called
+    bias fields or shading artifacts, which can corrupt medical imaging data.
+
+    Args:
+        input_image (sitk.Image): The SimpleITK image object to be corrected.
+        iterations (int): The maximum number of iterations for the correction algorithm.
+                          Higher values may improve accuracy but increase computation time.
+        fitting_level (int): The level of the B-spline fitting grid. A higher level
+                             allows the model to fit a more complex, less smooth bias field.
+
+    Returns:
+        sitk.Image: The bias-field-corrected image, or None if an error occurs.
+    """
+    try:
+        # Create a binary mask of the main tissue region using Otsu's thresholding.
+        # This helps the algorithm focus on the relevant anatomy and ignore the background.
+        mask_image = sitk.OtsuThreshold(input_image, 0, 1, 200)
+
+        # Cast the input image to a 32-bit float type, which is required by the N4 filter.
+        input_image = sitk.Cast(input_image, sitk.sitkFloat32)
+
+        # Initialize the N4 Bias Field Correction filter.
+        corrector = sitk.N4BiasFieldCorrectionImageFilter()
+
+        # Set the maximum number of iterations for the algorithm.
+        corrector.SetMaximumNumberOfIterations([iterations])
+        
+        # Set the number of control points for the B-spline grid. This is determined
+        # by the fitting_level and the image dimension. It controls the smoothness of the
+        # estimated bias field.
+        corrector.SetNumberOfControlPoints([fitting_level] * input_image.GetDimension())
+        
+        # Set the convergence threshold. The algorithm stops if the improvement
+        # between iterations is smaller than this value.
+        corrector.SetConvergenceThreshold(0.001)
+
+        # Execute the correction algorithm. The mask ensures that the bias field is
+        # estimated only within the tissue region.
+        output_image = corrector.Execute(input_image, mask_image)
+        
+        return output_image
+        
+    except Exception as e:
+        print(f"Bias correction failed: {e}")
+        return None
+
+def process_file(nrrd_file_path, output_file_path, fitting_level):
+    """
+    A wrapper function to read an image, apply N4 correction, and save the result.
+
+    Args:
+        nrrd_file_path (str): The file path of the input NRRD image.
+        output_file_path (str): The file path where the corrected image will be saved.
+        fitting_level (int): The fitting level to be passed to the n4_bias_correction function.
+    """
+    try:
+        # Read the image from the specified path.
+        nrrd_image = sitk.ReadImage(nrrd_file_path)
+        
+        # Apply the N4 bias correction.
+        corrected_image = n4_bias_correction(nrrd_image, iterations=25, fitting_level=fitting_level)
+        
+        # If the correction was successful, write the result to a new file.
+        if corrected_image is not None:
+            sitk.WriteImage(corrected_image, output_file_path)
+            print(f"Successfully processed and saved: {output_file_path}")
+        else:
+            print(f"Error during processing {nrrd_file_path}: Bias correction failed.")
+            
+    except Exception as e:
+        print(f"An error occurred while processing {nrrd_file_path}: {e}")
+
+def run_n4_correction(input_folder, output_folder, fitting_level):
+    """
+    Runs the N4 bias correction process for all specified files in a folder.
+
+    Args:
+        input_folder (str): The path to the folder containing the raw image files.
+        output_folder (str): The path to the folder where corrected images will be saved.
+        fitting_level (int): The fitting level for the B-spline grid.
+    """
+    # Note: This file selection is very specific. A more general approach would be:
+    # filelist = glob.glob(os.path.join(input_folder, '*.nrrd'))
+    # Or, to match the pattern: filelist = glob.glob(os.path.join(input_folder, '[1-7]_*'))
+    filelist = glob.glob(os.path.join(input_folder, '1_*')) + \
+               glob.glob(os.path.join(input_folder, '2_*')) + \
+               glob.glob(os.path.join(input_folder, '3_*')) + \
+               glob.glob(os.path.join(input_folder, '4_*')) + \
+               glob.glob(os.path.join(input_folder, '5_*')) + \
+               glob.glob(os.path.join(input_folder, '6_*')) + \
+               glob.glob(os.path.join(input_folder, '7_*'))
+
+    # Ensure the output directory exists.
+    os.makedirs(output_folder, exist_ok=True)
+    
+    # Iterate over each found file.
+    for input_path in filelist:
+        # Construct the full path for the output file.
+        output_path = os.path.join(output_folder, os.path.basename(input_path))
+        # Process the file.
+        process_file(input_path, output_path, fitting_level)
+
+# --- Main execution block ---
+# Define the source folder for raw images and the destination for corrected images.
+input_folder = r'E:\2411radiomics\Raw'
+output_folder = r'E:\2411radiomics\N4corrected'
+# Set the B-spline fitting level for the bias correction.
+fitting_level = 5
+
+# Start the process.
+run_n4_correction(input_folder, output_folder, fitting_level)
