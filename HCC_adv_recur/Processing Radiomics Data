@@ -1,0 +1,80 @@
+import pandas as pd
+import os
+import glob
+
+def process_radiomics_data(input_file, output_file):
+    """
+    Cleans and standardizes a merged radiomics feature DataFrame.
+
+    This function performs several specific actions:
+    1. Removes all diagnostic/provenance columns.
+    2. Keeps only the 'shape' features from one sequence (assumes shape is constant) and renames them.
+    3. Calculates excess kurtosis by subtracting 3 from all kurtosis features.
+    4. Removes other specified redundant or unstable features.
+    5. Sorts the final data by Patient ID.
+
+    Args:
+        input_file (str): Path to the merged radiomics CSV file.
+        output_file (str): Path to save the processed CSV file.
+    """
+    df = pd.read_csv(input_file)
+
+    # 1. Remove all diagnostics columns from pyradiomics (metadata, not features).
+    diagnostics_columns = [col for col in df.columns if 'diagnostics' in col]
+    df.drop(columns=diagnostics_columns, inplace=True)
+
+    # 2. Process 'original_shape' columns.
+    # Assumption: The shape of the ROI is the same across all imaging sequences.
+    # We keep only the shape features from the '1_Pre' scan to avoid redundancy.
+    original_shape_columns = [col for col in df.columns if 'original_shape' in col]
+    shape_columns_to_keep = [col for col in original_shape_columns if col.startswith('1_Pre_')]
+    
+    # Identify and drop the shape columns from all other sequences.
+    columns_to_drop_shape = [col for col in original_shape_columns if col not in shape_columns_to_keep]
+    df.drop(columns=columns_to_drop_shape, inplace=True)
+    
+    # Rename the kept columns by removing the '1_Pre_' prefix.
+    df.rename(columns={col: col.replace('1_Pre_', '') for col in shape_columns_to_keep}, inplace=True)
+
+    # 3. Process 'Kurtosis' columns.
+    # Convert statistical kurtosis to excess kurtosis by subtracting 3.
+    # This centers the value around 0 for a normal distribution.
+    kurtosis_columns = [col for col in df.columns if 'Kurtosis' in col]
+    for col in kurtosis_columns:
+        df[col] = df[col] - 3
+        df.rename(columns={col: col.replace('Kurtosis', 'Kurtosis_modified')}, inplace=True)
+
+    # 4. Remove additional specified columns that may be unstable or redundant.
+    # - These specific 2D diameter features are often less robust than their 3D counterparts.
+    specific_columns_to_delete = [
+        'original_shape_Maximum2DDiameterSlice', 
+        'original_shape_Maximum2DDiameterColumn', 
+        'original_shape_Maximum2DDiameterRow'
+    ]
+    df.drop(columns=specific_columns_to_delete, inplace=True, errors='ignore')
+
+    # - TotalEnergy is highly dependent on image normalization, and MCC can be unstable.
+    phase_features_to_delete = ['original_firstorder_TotalEnergy', 'original_glcm_MCC']
+    columns_to_drop_phase = [col for col in df.columns if any(feat in col for feat in phase_features_to_delete)]
+    df.drop(columns=columns_to_drop_phase, inplace=True)
+    
+    # 5. Sort the DataFrame by 'Patient_ID' for consistency.
+    # The 'Patient_ID' column might be read as numbers, so we convert to numeric for correct sorting.
+    df['Patient_ID'] = pd.to_numeric(df['Patient_ID'])
+    df.sort_values(by='Patient_ID', inplace=True)
+
+    # Save the processed DataFrame to a new CSV file.
+    df.to_csv(output_file, index=False)
+    print(f"Processed data saved to {output_file}")
+
+# --- Main execution block ---
+# Define input and output folders for batch processing.
+input_folder = r'D:\2411radiomics\Feature_pyradiomics_csv\bc64'
+output_folder = r'D:\2411radiomics\IBSI_csv\bc64'
+os.makedirs(output_folder, exist_ok=True)
+
+# Process all CSV files in the input folder.
+filelist = glob.glob(os.path.join(input_folder, "*.csv"))
+for input_path in filelist:
+    output_path = os.path.join(output_folder, os.path.basename(input_path))
+    process_radiomics_data(input_path, output_path)
