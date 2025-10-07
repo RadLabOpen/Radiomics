@@ -1,0 +1,147 @@
+import SimpleITK as sitk
+import pandas as pd
+import radiomics
+from radiomics import featureextractor
+import logging
+import os
+from multiprocessing import Pool, cpu_count
+
+def pyradiomics_feature_extractor(args):
+    """
+    Extracts radiomics features for a single image-mask pair.
+
+    This function is designed to be called by a multiprocessing pool. It takes one
+    argument (a tuple) containing all necessary file paths.
+
+    Args:
+        args (tuple): A tuple containing (image_path, mask_path, save_path).
+    """
+    image_path, mask_path, save_path = args
+    
+    # Load the image and mask files using SimpleITK.
+    image = sitk.ReadImage(image_path)
+    mask = sitk.ReadImage(mask_path)
+    
+    # --- Critical Step: Ensure Image and Mask Alignment ---
+    # Copy the geometric information (origin, spacing, direction) from the image to the mask.
+    # This is crucial to ensure that the image and mask are perfectly aligned in physical space.
+    # Mismatched metadata can lead to incorrect feature extraction.
+    mask.SetDirection(image.GetDirection())
+    mask.SetOrigin(image.GetOrigin())
+    mask.SetSpacing(image.GetSpacing())
+    
+    # Optional: Overwrite the mask file with the corrected metadata. Use with caution.
+    # sitk.WriteImage(mask, mask_path, True)
+
+    # --- Set up Pyradiomics Extractor ---
+    # Configure logging to capture detailed information about the extraction process.
+    logger = radiomics.logger
+    logger.setLevel(logging.ERROR) # Set to ERROR to avoid verbose output for each file.
+
+    # Define the settings for the feature extractor.
+    settings = {}
+    settings['binCount'] = 16  # The number of bins for gray-level discretization.
+    settings['resampledPixelSpacing'] = [1, 1, 1]  # Resample images to isotropic 1mm voxels. This makes features comparable across different scans.
+    settings['normalize'] = True  # Normalize the image intensity.
+    settings['normalizeScale'] = 1 # A scaling factor for normalization.
+    settings['removeOutliers'] = 3 # Clips intensity values beyond 3 standard deviations from the mean.
+
+    # Instantiate the feature extractor with the specified settings.
+    extractor = featureextractor.RadiomicsFeatureExtractor(**settings)
+    
+    # By default, all feature classes are enabled.
+    extractor.enableAllFeatures()
+
+    # --- Specify Image Types (Filters) ---
+    # Enable feature extraction on the original (unfiltered) image.
+    extractor.enableImageTypeByName('Original')
+    # You can also enable other filters to extract features from derived images.
+    # For example, to extract features from Wavelet-filtered images:
+    # extractor.enableImageTypeByName('Wavelet')
+
+    # Execute the feature extraction.
+    featureVector = extractor.execute(image, mask)
+
+    # --- Process and Save Results ---
+    # Convert the output dictionary of features into a pandas DataFrame for easy saving.
+    # The result is a two-column table: feature name and its value.
+    featureVector_df = pd.DataFrame.from_dict(featureVector.items())
+    featureVector_df.columns = ['radiomics_feature', 'value']
+    
+    # Save the feature DataFrame to a CSV file.
+    featureVector_df.to_csv(save_path, index=False)
+    
+    print(f"Processed: {os.path.basename(image_path)} with {os.path.basename(mask_path)}, saved to {os.path.basename(save_path)}")
+    # Note: The original line 'save_path.close()' would cause an error, as 'save_path' is a string,
+    # not a file object. It has been removed.
+
+def run_feature_extractor(image_folder, seg_folder, output_folder):
+    """
+    Orchestrates the feature extraction for an entire dataset using multiprocessing.
+    It identifies all image-mask pairs and distributes the extraction tasks across
+    multiple CPU cores.
+    """
+    # Define the expected naming conventions for image types and segmentation folders.
+    image_types = ['1_Pre', '2_AP', '3_PP', '4_HP', '5_EQ', '6_T2', '7_HBP']
+    seg_folders = ['R1', 'R1_3mm', 'R1_5mm', 'R2', 'R2_3mm', 'R2_5mm']
+    
+    # Get a set of unique patient IDs from the filenames in the image folder.
+    unique_ids = set(
+        filename.split('_')[-1].replace('.nrrd', '')
+        for filename in os.listdir(image_folder)
+        if filename.endswith('.nrrd')
+    )
+    
+    # Create a list of tasks to be processed. Each task is a tuple of file paths.
+    tasks = []
+    for unique_id in unique_ids:
+        for seg_folder_name in seg_folders:
+            seg_path = os.path.join(seg_folder, seg_folder_name, f'{unique_id}.nrrd')
+            
+            # Check if the segmentation file exists before proceeding.
+            if not os.path.exists(seg_path):
+                print(f"Warning: Segmentation file not found, skipping: {seg_path}")
+                continue
+            
+            for image_type in image_types:
+                image_path = os.path.join(image_folder, f'{image_type}_{unique_id}.nrrd')
+                
+                # Check if the image file exists.
+                if not os.path.exists(image_path):
+                    continue
+                
+                # Define the output directory and create it if it doesn't exist.
+                output_dir = os.path.join(output_folder, seg_folder_name)
+                os.makedirs(output_dir, exist_ok=True)
+                output_path = os.path.join(output_dir, f'{image_type}_{unique_id}.csv')
+                
+                # Skip files that have already been processed to allow for easy resumption.
+                if os.path.exists(output_path):
+                    continue
+                
+                # Add the tuple of paths to the task list.
+                tasks.append((image_path, seg_path, output_path))
+
+    # --- Set up Multiprocessing ---
+    # Use all available CPU cores except one to keep the system responsive.
+    NUM_OF_WORKERS = max(1, cpu_count() - 1)
+    print(f"Starting feature extraction with {NUM_OF_WORKERS} workers...")
+
+    # Create a pool of worker processes.
+    with Pool(NUM_OF_WORKERS) as pool:
+        # The map function distributes the 'tasks' list among the workers,
+        # with each worker executing the 'pyradiomics_feature_extractor' function.
+        pool.map(pyradiomics_feature_extractor, tasks)
+    print("Feature extraction complete.")
+
+
+# --- Main execution block ---
+# To run this script, you would uncomment the following lines and provide the correct paths.
+'''
+if __name__ == '__main__':
+    run_feature_extractor(
+        image_folder='E:\\2411radiomics\\N4corrected',
+        seg_folder='E:\\2411radiomics\\HCCSegmentation',
+        output_folder='E:\\2411radiomics\\bc16_features'
+    )
+'''
