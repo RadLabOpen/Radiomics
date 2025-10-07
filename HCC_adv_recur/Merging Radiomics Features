@@ -1,0 +1,56 @@
+import os
+import pandas as pd
+from glob import glob
+
+def merge_radiomics_features(input_folder, output_file):
+    """
+    Merges individual radiomics feature CSV files into a single master CSV file.
+
+    It transforms data from a "long" format (many files, each with feature-value pairs)
+    to a "wide" format (one file, with patients as rows and unique features as columns).
+
+    Args:
+        input_folder (str): The folder containing the individual feature CSV files.
+        output_file (str): The path for the final merged CSV file.
+    """
+    # Get a list of all CSV file paths in the input folder.
+    all_files = glob(os.path.join(input_folder, "*.csv"))
+
+    # Initialize a dictionary to hold the merged data.
+    # Structure: { 'patient_id': {'feature_1_name': value1, 'feature_2_name': value2, ...} }
+    merged_data = {}
+
+    for file_path in all_files:
+        # From the filename, extract the image sequence (e.g., '1_Pre') and the patient ID.
+        file_name = os.path.basename(file_path)
+        parts = file_name.replace('.csv', '').split('_')
+        sequence = '_'.join(parts[:-1]) # e.g., '1_Pre'
+        unique_id = parts[-1]          # e.g., '5018644'
+
+        # Read the individual feature CSV.
+        df = pd.read_csv(file_path)
+
+        # If this is the first time seeing this patient ID, create a new entry.
+        if unique_id not in merged_data:
+            merged_data[unique_id] = {}
+
+        # Iterate through the features in the current file.
+        for _, row in df.iterrows():
+            # Create a unique feature name by prepending the sequence (e.g., '1_Pre_original_shape_Volume').
+            feature_name = f"{sequence}_{row['radiomics_feature']}"
+            # Add the feature and its value to the patient's record.
+            merged_data[unique_id][feature_name] = row['value']
+
+    # Convert the nested dictionary into a pandas DataFrame.
+    # 'orient="index"' makes the dictionary keys (patient IDs) into rows.
+    merged_df = pd.DataFrame.from_dict(merged_data, orient='index')
+    
+    # Set the index name to 'Patient_ID', which will become the first column header.
+    merged_df.index.name = 'Patient_ID'
+    merged_df.reset_index(inplace=True)
+
+    # Save the final DataFrame to a single CSV file.
+    merged_df.to_csv(output_file, index=False)
+    print(f"Data successfully merged into {output_file}")
+
+# Example usage would be here.
