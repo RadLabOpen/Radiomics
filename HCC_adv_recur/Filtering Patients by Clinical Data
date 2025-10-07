@@ -1,0 +1,50 @@
+import pandas as pd
+import glob
+import os
+
+def filter_patients_by_clinical_data(radiomics_file, clinical_file, output_file):
+    """
+    Filters a radiomics dataset to include only patients present in a clinical data file.
+
+    Args:
+        radiomics_file (str): Path to the processed radiomics CSV file.
+        clinical_file (str): Path to the clinical data CSV file. Must contain a 'Patient_ID' column.
+        output_file (str): Path to save the final, filtered radiomics CSV file.
+    """
+    # Load the radiomics and clinical datasets.
+    radiomics_df = pd.read_csv(radiomics_file)
+    clinical_df = pd.read_csv(clinical_file)
+
+    # Get a unique set of Patient IDs from the clinical data for efficient lookup.
+    clinical_ids = set(clinical_df['Patient_ID'])
+
+    # Filter the radiomics DataFrame, keeping rows where the 'Patient_ID' is in the clinical set.
+    filtered_df = radiomics_df[radiomics_df['Patient_ID'].isin(clinical_ids)]
+    
+    # Identify and print any patient IDs that were in the radiomics data but not the clinical data.
+    # This is helpful for data validation.
+    excluded_ids = set(radiomics_df['Patient_ID']) - clinical_ids
+    if excluded_ids:
+        print(f"--- For file: {os.path.basename(radiomics_file)} ---")
+        print("Excluded Patient IDs (not found in clinical data):")
+        for pid in sorted(list(excluded_ids)):
+            print(pid)
+    else:
+        print(f"All patient IDs in {os.path.basename(radiomics_file)} were found in the clinical data.")
+
+    # Save the filtered DataFrame to a new CSV file.
+    filtered_df.to_csv(output_file, index=False)
+    print(f"Filtered data saved to {output_file}\n")
+
+# --- Main execution block ---
+# Define input, output, and clinical data file paths.
+input_folder = r'C:\Users\KJG\Desktop\radiomics\IBSI_csv\bc128'
+output_folder = r'C:\Users\KJG\Desktop\radiomics\IBSI_csv_clinical_exclusion\bc128'
+clinical_file_path = r'C:\Users\KJG\Downloads\clinical.csv'
+os.makedirs(output_folder, exist_ok=True)
+
+# Process all CSV files in the input folder.
+filelist = glob.glob(os.path.join(input_folder, "*.csv"))
+for input_path in filelist:
+    output_path = os.path.join(output_folder, os.path.basename(input_path))
+    filter_patients_by_clinical_data(input_path, clinical_file_path, output_path)
